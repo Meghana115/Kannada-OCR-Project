@@ -4,8 +4,7 @@ import numpy as np
 import easyocr
 import re
 from gtts import gTTS
-from difflib import get_close_matches
-import os
+from PIL import Image
 
 st.set_page_config(page_title="Kannada Numeral Recognition Engine", layout="centered")
 
@@ -40,7 +39,7 @@ AUDIO_PRONUNCIATION_MAP = {
 }
 
 NATIVE_DIGITS = {
-    "跑": 0, "೧": 1, "೨": 2, "೩": 3, "೪": 4, 
+    "೦": 0, "೧": 1, "೨": 2, "೩": 3, "೪": 4, 
     "೫": 5, "೬": 6, "೭": 7, "೮": 8, "೯": 9
 }
 
@@ -62,59 +61,54 @@ if uploaded_file is not None:
     if st.button("Analyze Kannada Document", type="primary"):
         with st.spinner("Executing Image Preprocessing & OCR Pipeline..."):
             
-            # --- STAGE 1: CONTRAST NORMALIZATION & IMAGE ENHANCEMENT ---
+            # --- STAGE 1: BILATERAL FILTER & ADAPTIVE THRESHOLDING ---
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-            # Upscale image to sharpen fine strokes of handwritten Kannada letters
-            resized = cv2.resize(gray, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
+            resized = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+            filtered = cv2.bilateralFilter(resized, 9, 75, 75)
+            cleaned = cv2.adaptiveThreshold(
+                filtered, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                cv2.THRESH_BINARY, 11, 2
+            )
             
-            mean_val = np.mean(resized)
-            if mean_val < 127:
-                cleaned = cv2.threshold(resized, 100, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
-            else:
-                cleaned = cv2.threshold(resized, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
-            
-            # --- STAGE 2: EASYOCR KANNADA FRAMEWORK INITIALIZATION ---
+            # --- STAGE 2: INITIALIZE EASYOCR ENGINE ---
             reader = easyocr.Reader(['kn', 'en'], gpu=False)
             ocr_results = reader.readtext(cleaned)
             
             detected_items = []
-            valid_word_keys = list(NUM_WORDS.keys())
+            extracted_text_lines = []
             
-            # Combine all detected strings into a single text sequence for parsing
-            combined_text_stream = " ".join([res[1].strip() for res in ocr_results])
-            
-            # Layer A: Match Native Kannada Symbols (೦-೯) or Standard Digits
-            for char in combined_text_stream:
-                if char in NATIVE_DIGITS:
-                    val = NATIVE_DIGITS[char]
-                    if val != 0:
-                        detected_items.append((val, f"{char} = {val} (ಕನ್ನಡ Symbol)"))
-                elif char.isdigit():
-                    val = int(char)
-                    if val != 0:
-                        detected_items.append((val, f"{char} = {val} (Standard Digit)"))
-            
-            # Layer B: Match Textual Kannada Number Words (ಒಂದು,ಎರಡು...)
-            for target_word in valid_word_keys:
-                val = NUM_WORDS[target_word]
+            for (bbox, text, prob) in ocr_results:
+                clean_line = text.strip()
+                extracted_text_lines.append(clean_line)
                 
-                if target_word in combined_text_stream:
-                    count = combined_text_stream.count(target_word)
-                    for _ in range(count):
-                        detected_items.append((val, f"{target_word} = {val} (ಕನ್ನಡ Word)"))
-                else:
-                    # Fuzzy match fallback for slightly distorted handwriting
-                    tokens = re.split(r'\s+', combined_text_stream)
-                    for t in tokens:
-                        t_clean = re.sub(r'[^\w\s]', '', t).strip()
-                        if len(t_clean) >= 2:
-                            fuzzy_matches = get_close_matches(t_clean, [target_word], n=1, cutoff=0.50)
-                            if fuzzy_matches:
-                                detected_items.append((val, f"{target_word} = {val} (Fuzzy Word Match)"))
-            
-            # --- STAGE 3: METRICS RENDERING & TEXT-TO-SPEECH ---
+                # Split line segments into clean individual tokens
+                words = clean_line.split()
+                for word in words:
+                    # Strip away layout punctuation symbols
+                    clean_word = word.strip(".,\"'()!:;-‘’“”")
+                    
+                    # Target A: Explicit Native Kannada Symbols
+                    for char in clean_word:
+                        if char in NATIVE_DIGITS:
+                            val = NATIVE_DIGITS[char]
+                            detected_items.append((val, f"{char} = {val} (ಕನ್ನಡ Symbol)"))
+                        
+                        # Target B: Standard Digits
+                        elif char.isdigit():
+                            val = int(char)
+                            detected_items.append((val, f"{char} = {val} (Standard Digit)"))
+                    
+                    # Target C: Exact Kannada Textual Number Words
+                    if clean_word in NUM_WORDS:
+                        val = NUM_WORDS[clean_word]
+                        detected_items.append((val, f"{clean_word} = {val} (ಕನ್ನಡ Word)"))
+
+            # --- STAGE 3: OUTPUT RENDERER ---
             unique_detections = list(set(detected_items))
             unique_detections.sort(key=lambda x: x[0])
+            
+            st.markdown("### 📝 Extracted Text Preview:")
+            st.text_area("AI Corpus Readout:", value="\n".join(extracted_text_lines), height=150)
             
             st.markdown(f"### Total Unique Detections Found: {len(unique_detections)}")
             
@@ -126,19 +120,14 @@ if uploaded_file is not None:
                     for val, display_text in unique_detections:
                         st.markdown(f"• **{display_text}**")
                         audio_sequence.append(AUDIO_PRONUNCIATION_MAP[val])
-                else:
-                    st.write("No Kannada digits or textual tracking words were detected in this document instance.")
-                
-                st.markdown("#### Generated Phonetic Kannada Voice Playback:")
-                if unique_detections and 'audio_sequence' in locals() and audio_sequence:
-                    speech_string = ", ".join(audio_sequence)
                     
-                    # Convert extracted metrics into native spoken Kannada speech audio
+                    st.markdown("#### Generated Phonetic Kannada Voice Playback:")
+                    speech_string = ", ".join(audio_sequence)
                     tts = gTTS(text=speech_string, lang='kn', slow=False)
                     audio_filename = "kannada_pronunciation.mp3"
                     tts.save(audio_filename)
                     st.audio(audio_filename, format="audio/mp3")
                 else:
-                    st.write("Audio generation skipped.")
+                    st.write("No Kannada digits or textual tracking words were detected in this document instance.")
                 
                 st.markdown('</div>', unsafe_allow_html=True)
