@@ -1,5 +1,6 @@
 streamlit
-opencv-python-headless
 easyocr
-gtts
+opencv-python-headless
 numpy
+Pillow
+gTTS
