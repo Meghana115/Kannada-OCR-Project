@@ -60,14 +60,20 @@ if uploaded_file is not None:
                 extracted_text_lines = []
                 detected_numbers = []
                 
-                # Quick mapping of common Kannada numeral tokens for highlighting
-                kannada_digits = ['೦', '೧', '೨', '೩', '೪', '೫', '೬', '೭', '೮', '೯']
-                
-                for (bbox, text, prob) in results:
-                    extracted_text_lines.append(text)
-                    
-                    # Track if individual digits or typical words are found
-                    for digit in kannada_digits:
+          # Quick mapping of common Kannada numeral tokens for highlighting
+kannada_digits = ['೦', '೧', '೨', '೩', '೪', '೫', '೬', '೭', '೮', '೯']
+
+for (bbox, text, prob) in results:
+    extracted_text_lines.append(text)
+    
+    # Split sentences into individual words to extract exact numerical digits/words
+    words = text.split()
+    for word in words:
+        # Checks if a Kannada digit or standalone number word is present
+        if any(digit in word for digit in kannada_digits) or word in ['ಒಂದು', 'ಎರಡು', 'ಮೂರು', 'ನಾಲ್ಕು', 'ಐದು', 'ಆರು', 'ಏಳು', 'ಎಂಟು', 'ಒಂಬತ್ತು', 'ಹತ್ತು']:
+            clean_word = word.strip(".,\"'()!:;")
+            if clean_word not in detected_numbers:
+                detected_numbers.append(clean_word)
                         if digit in text and text not in detected_numbers:
                             detected_numbers.append(text)
 
